@@ -137,14 +137,18 @@ jobs:
           
           files=(release-dist/ps5lm-ultra-*.zip release-dist/ps5lm-ultra-*.zip.sha256)
           
+          cat << 'EOF' > release_notes.md
+          ### PS5LM Ultra Universal LLM Runner for PS5
+
+          - Universal Model Execution: Models under 11 GiB run via GPU Vulkan with 140+ tok/s throughput; models up to 80B parameters automatically engage the sliding-window shard streaming engine across internal NVMe SSD.
+          - TV Pulse Dashboard: Native HDMI display rendering real-time GPU/CPU utilization, thermal telemetry (CPU, SoC, fan speed), and memory allocation.
+          - Network Interface: Built-in HTTP server at port 8081 providing web chat UI and OpenAI/Anthropic-compatible completions API.
+          EOF
+
           if gh release view "$tag" >/dev/null 2>&1; then
             gh release upload "$tag" "${files[@]}" --clobber
           else
             gh release create "$tag" "${files[@]}" \
               --title "PS5LM Ultra $tag" \
-              --notes "### PS5LM Ultra $tag: Universal LLM Runner for PS5
-              
-- **Universal Model Execution**: Models $\le$ 11 GiB run via GPU Vulkan with 140+ tok/s throughput; models up to 80B parameters automatically engage the sliding-window shard streaming engine across internal NVMe SSD.
-- **TV Pulse Dashboard**: Native HDMI display rendering real-time GPU/CPU utilization, thermal telemetry (CPU, SoC, fan speed), and memory allocation.
-- **Network Interface**: Built-in HTTP server at port 8081 providing web chat UI and OpenAI/Anthropic-compatible completions API."
+              --notes-file release_notes.md
           fi
