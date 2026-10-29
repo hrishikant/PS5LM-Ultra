@@ -41,11 +41,11 @@ jobs:
             clang-18 clang-format-18 clang-tidy-18 lld-18 llvm-18 \
             make pkg-config tar unzip wget zip zlib1g-dev \
             ninja-build cmake glslc libvulkan-dev spirv-tools \
-            rsync curl git
+            rsync curl git libclc-18 libclc-18-dev llvm-spirv
 
       - name: Install Python build tools
         run: |
-          pip install --upgrade meson ninja
+          pip install --upgrade meson ninja mako markupsafe
 
       - name: Configure Clang 18 defaults
         run: |
@@ -62,15 +62,29 @@ jobs:
         run: |
           mkdir -p .deps/src
           
-          # Clone the required forks
-          if [ ! -d ".deps/src/PS5_PayloadSDK" ]; then
-            git clone --depth 1 https://github.com/mihawk-99/PS5_PayloadSDK.git .deps/src/PS5_PayloadSDK
+          # Fetch exact pinned commits
+          if [ ! -d ".deps/src/PS5_PayloadSDK/.git" ]; then
+            mkdir -p .deps/src/PS5_PayloadSDK
+            git -C .deps/src/PS5_PayloadSDK init
+            git -C .deps/src/PS5_PayloadSDK remote add origin https://github.com/mihawk-99/PS5_PayloadSDK.git
+            git -C .deps/src/PS5_PayloadSDK fetch --depth 1 origin b83202be73e930050e00de0f1b4d9ec46c0391bf
+            git -C .deps/src/PS5_PayloadSDK checkout FETCH_HEAD
           fi
-          if [ ! -d ".deps/src/PS5_Mesa" ]; then
-            git clone --depth 1 https://github.com/mihawk-99/PS5_Mesa.git .deps/src/PS5_Mesa
+
+          if [ ! -d ".deps/src/PS5_Mesa/.git" ]; then
+            mkdir -p .deps/src/PS5_Mesa
+            git -C .deps/src/PS5_Mesa init
+            git -C .deps/src/PS5_Mesa remote add origin https://github.com/mihawk-99/PS5_Mesa.git
+            git -C .deps/src/PS5_Mesa fetch --depth 1 origin 1ba9874f478657ccf6da72ce55f0260164cc0bd0
+            git -C .deps/src/PS5_Mesa checkout FETCH_HEAD
           fi
-          if [ ! -d ".deps/src/PS5_Vulkan" ]; then
-            git clone --depth 1 https://github.com/mihawk-99/PS5_Vulkan.git .deps/src/PS5_Vulkan
+
+          if [ ! -d ".deps/src/PS5_Vulkan/.git" ]; then
+            mkdir -p .deps/src/PS5_Vulkan
+            git -C .deps/src/PS5_Vulkan init
+            git -C .deps/src/PS5_Vulkan remote add origin https://github.com/mihawk-99/PS5_Vulkan.git
+            git -C .deps/src/PS5_Vulkan fetch --depth 1 origin main
+            git -C .deps/src/PS5_Vulkan checkout FETCH_HEAD
           fi
 
           # Setup PS5 native dependencies (SDK and zlib)
