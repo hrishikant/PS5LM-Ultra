@@ -1,0 +1,363 @@
+diff --git a/ggml/include/ggml-cpu.h b/ggml/include/ggml-cpu.h
+index dc6453c6e..4e864bb8d 100644
+--- a/ggml/include/ggml-cpu.h
++++ b/ggml/include/ggml-cpu.h
+@@ -77,6 +77,9 @@ extern "C" {
+     // system info
+     //
+ 
++    typedef void (*ggml_cpu_tensor_hook_t)(const struct ggml_tensor * t);
++    GGML_BACKEND_API void ggml_cpu_set_tensor_hook(ggml_cpu_tensor_hook_t hook);
++
+     // x86
+     GGML_BACKEND_API int ggml_cpu_has_sse3       (void);
+     GGML_BACKEND_API int ggml_cpu_has_ssse3      (void);
+diff --git a/ggml/src/ggml-cpu/ggml-cpu.c b/ggml/src/ggml-cpu/ggml-cpu.c
+index ab82e3d6c..bcfd03deb 100644
+--- a/ggml/src/ggml-cpu/ggml-cpu.c
++++ b/ggml/src/ggml-cpu/ggml-cpu.c
+@@ -1737,6 +1737,12 @@ static void ggml_compute_forward_mul_mat_id(
+ 
+ /////////////////////////////////
+ 
++static ggml_cpu_tensor_hook_t s_ggml_cpu_tensor_hook = NULL;
++
++void ggml_cpu_set_tensor_hook(ggml_cpu_tensor_hook_t hook) {
++    s_ggml_cpu_tensor_hook = hook;
++}
++
+ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggml_tensor * tensor) {
+     GGML_ASSERT(params);
+ 
+@@ -1744,6 +1750,15 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
+         return;
+     }
+ 
++    if (s_ggml_cpu_tensor_hook) {
++        for (int i = 0; i < GGML_MAX_SRC; i++) {
++            if (tensor->src[i]) {
++                s_ggml_cpu_tensor_hook(tensor->src[i]);
++            }
++        }
++        s_ggml_cpu_tensor_hook(tensor);
++    }
++
+     // extra_buffer op?
+     if (ggml_cpu_extra_compute_forward(params, tensor)) {
+         return;
+diff --git a/src/llama-mmap.cpp b/src/llama-mmap.cpp
+index 4d1cd31e9..85fb5ffe7 100644
+--- a/src/llama-mmap.cpp
++++ b/src/llama-mmap.cpp
+@@ -10,6 +10,10 @@
+ #include <stdexcept>
+ #include <cerrno>
+ #include <algorithm>
++#include <mutex>
++#include <unordered_map>
++#include <atomic>
++#include <csignal>
+ 
+ #ifdef __has_include
+     #if __has_include(<unistd.h>)
+@@ -478,12 +482,19 @@ static llama_mmap::ranges ranges_complement(llama_mmap::ranges ranges, size_t li
+ struct llama_mmap::impl {
+ #ifdef _POSIX_MAPPED_FILES
+     std::vector<std::pair<size_t, size_t>> mapped_fragments;
++    bool is_shared_window = false;
+ 
+-    impl(struct llama_file * file, size_t prefetch, bool numa, const llama_mmap::ranges & lazy_ranges) {
++    impl(struct llama_file * file, size_t prefetch, bool numa, const llama_mmap::ranges & lazy_ranges, void * shared_addr = nullptr) {
+         size = file->size();
+         int fd = file->file_id();
+         int flags = MAP_SHARED;
+         if (numa) { prefetch = 0; }
++
++        if (shared_addr != nullptr) {
++            addr = shared_addr;
++            is_shared_window = true;
++            return;
++        }
+ #ifdef __linux__
+         if (posix_fadvise(fd, 0, 0, POSIX_FADV_SEQUENTIAL)) {
+             LLAMA_LOG_WARN("warning: posix_fadvise(.., POSIX_FADV_SEQUENTIAL) failed: %s\n",
+@@ -541,6 +552,9 @@ struct llama_mmap::impl {
+     }
+ 
+     void unmap_fragment(size_t first, size_t last) {
++        if (is_shared_window) {
++            return;
++        }
+         int page_size = sysconf(_SC_PAGESIZE);
+         align_range(&first, &last, page_size);
+         size_t len = last - first;
+@@ -577,6 +591,9 @@ struct llama_mmap::impl {
+     }
+ 
+     ~impl() {
++        if (is_shared_window) {
++            return;
++        }
+         for (const auto & frag : mapped_fragments) {
+             if (munmap((char *) addr + frag.first, frag.second - frag.first)) {
+                 LLAMA_LOG_WARN("warning: munmap failed: %s\n", strerror(errno));
+@@ -677,7 +694,7 @@ struct llama_mmap::impl {
+ };
+ 
+ llama_mmap::llama_mmap(struct llama_file * file, size_t prefetch, bool numa,
+-        const ranges & lazy_ranges) : pimpl(std::make_unique<impl>(file, prefetch, numa, lazy_ranges)) {}
++        const ranges & lazy_ranges, void * shared_addr) : pimpl(std::make_unique<impl>(file, prefetch, numa, lazy_ranges, shared_addr)) {}
+ llama_mmap::~llama_mmap() = default;
+ 
+ size_t llama_mmap::size() const { return pimpl->size; }
+@@ -691,6 +708,105 @@ const bool llama_mmap::SUPPORTED  = true;
+ const bool llama_mmap::SUPPORTED  = false;
+ #endif
+ 
++// PS5 Sliding Window Shard Pager State
++static std::mutex s_shard_mtx;
++static std::atomic<int> s_active_shard{-1};
++static void * s_shared_addr = nullptr;
++static size_t s_max_window_size = 0;
++static std::vector<int> s_shard_fds;
++static std::vector<size_t> s_shard_sizes;
++
++static std::mutex s_tensor_map_mtx;
++static std::unordered_map<const void *, int> s_tensor_to_shard;
++
++extern "C" {
++
++void llama_mmap_register_shard(int idx, int fd, size_t size, void * shared_addr) {
++    std::lock_guard<std::mutex> lock(s_shard_mtx);
++    if (idx >= (int)s_shard_fds.size()) {
++        s_shard_fds.resize(idx + 1, -1);
++        s_shard_sizes.resize(idx + 1, 0);
++    }
++    int d = dup(fd);
++    s_shard_fds[idx] = (d >= 0) ? d : fd;
++    s_shard_sizes[idx] = size;
++    s_shared_addr = shared_addr;
++    if (size > s_max_window_size) {
++        s_max_window_size = size;
++    }
++    if (idx == 0) {
++        s_active_shard.store(0, std::memory_order_relaxed);
++    }
++}
++
++void llama_mmap_activate_shard(int idx) {
++    if (idx < 0) return;
++    if (s_active_shard.load(std::memory_order_relaxed) == idx) {
++        return;
++    }
++
++    std::lock_guard<std::mutex> lock(s_shard_mtx);
++    int current = s_active_shard.load(std::memory_order_relaxed);
++    if (current == idx) {
++        return;
++    }
++
++    if (s_shared_addr != nullptr && idx < (int)s_shard_fds.size() && s_shard_fds[idx] >= 0) {
++        if (current >= 0 && current < (int)s_shard_sizes.size()) {
++            munmap(s_shared_addr, s_shard_sizes[current]);
++        }
++        void * p = mmap(s_shared_addr, s_shard_sizes[idx], PROT_READ, MAP_SHARED | MAP_FIXED, s_shard_fds[idx], 0);
++        if (p == MAP_FAILED) {
++            fprintf(stderr, "[ps5_mmap] activate_shard(%d) FAILED at %p (errno=%d: %s)\n",
++                    idx, s_shared_addr, errno, strerror(errno));
++        } else {
++            s_active_shard.store(idx, std::memory_order_release);
++        }
++    }
++}
++
++void llama_mmap_record_tensor_shard(const struct ggml_tensor * t, int shard_idx) {
++    if (!t) return;
++    std::lock_guard<std::mutex> lock(s_tensor_map_mtx);
++    s_tensor_to_shard[(const void *)t] = shard_idx;
++}
++
++int llama_mmap_get_tensor_shard(const struct ggml_tensor * t) {
++    if (!t) return -1;
++    const struct ggml_tensor * cur = t;
++    while (cur->view_src) {
++        cur = cur->view_src;
++    }
++    std::lock_guard<std::mutex> lock(s_tensor_map_mtx);
++    auto it = s_tensor_to_shard.find((const void *)cur);
++    if (it != s_tensor_to_shard.end()) {
++        return it->second;
++    }
++    it = s_tensor_to_shard.find((const void *)t);
++    if (it != s_tensor_to_shard.end()) {
++        return it->second;
++    }
++    return -1;
++}
++
++void llama_mmap_check_tensor(const struct ggml_tensor * t) {
++    if (!t || !s_shared_addr) return;
++
++    // Fast check: if tensor data does not fall within shared mmap window, it's RAM activation
++    uintptr_t p = (uintptr_t)t->data;
++    uintptr_t base = (uintptr_t)s_shared_addr;
++    if (p < base || p >= base + s_max_window_size) {
++        return;
++    }
++
++    int shard = llama_mmap_get_tensor_shard(t);
++    if (shard >= 0) {
++        llama_mmap_activate_shard(shard);
++    }
++}
++
++} // extern "C"
++
+ // llama_mlock
+ 
+ struct llama_mlock::impl {
+diff --git a/src/llama-mmap.h b/src/llama-mmap.h
+index 6c6393d57..2a48bf0e4 100644
+--- a/src/llama-mmap.h
++++ b/src/llama-mmap.h
+@@ -50,7 +50,7 @@ struct llama_mmap {
+ 
+     llama_mmap(const llama_mmap &) = delete;
+     llama_mmap(struct llama_file * file, size_t prefetch = (size_t) -1, bool numa = false,
+-               const ranges & lazy_ranges = {});
++               const ranges & lazy_ranges = {}, void * shared_addr = nullptr);
+     ~llama_mmap();
+ 
+     size_t size() const;
+@@ -65,6 +65,18 @@ private:
+     std::unique_ptr<impl> pimpl;
+ };
+ 
++#ifdef __cplusplus
++extern "C" {
++#endif
++void llama_mmap_register_shard(int idx, int fd, size_t size, void * shared_addr);
++void llama_mmap_activate_shard(int idx);
++void llama_mmap_record_tensor_shard(const struct ggml_tensor * t, int shard_idx);
++int  llama_mmap_get_tensor_shard(const struct ggml_tensor * t);
++void llama_mmap_check_tensor(const struct ggml_tensor * t);
++#ifdef __cplusplus
++}
++#endif
++
+ struct llama_mlock {
+     llama_mlock();
+     ~llama_mlock();
+diff --git a/src/llama-model-loader.cpp b/src/llama-model-loader.cpp
+index bc93c6f9e..957a115a1 100644
+--- a/src/llama-model-loader.cpp
++++ b/src/llama-model-loader.cpp
+@@ -1,6 +1,7 @@
+ #include "llama-model-loader.h"
+ 
+ #include "ggml-alloc.h"
++#include "ggml-cpu.h"
+ #include "ggml.h"
+ #include "gguf.h"
+ #include "llama-hparams.h"
+@@ -1413,6 +1414,10 @@ void llama_model_loader::init_mappings(bool prefetch, llama_mlocks * mlock_mmaps
+     if (use_mmap || lazy.any()) {
+         mappings.reserve(files.size());
+         mmaps_used.reserve(files.size());
++
++        void * shared_addr = nullptr;
++        bool use_shared_window = (files.size() > 1);
++
+         for (uint32_t idx = 0; idx < files.size(); idx++) {
+             const auto & file = files[idx];
+ 
+@@ -1429,8 +1434,21 @@ void llama_model_loader::init_mappings(bool prefetch, llama_mlocks * mlock_mmaps
+ 
+             const size_t prefetch_size = prefetch && use_mmap ? -1 : 0;
+ 
++            void * addr_to_pass = (idx > 0 && use_shared_window) ? shared_addr : nullptr;
++
+             std::unique_ptr<llama_mmap> mapping = std::make_unique<llama_mmap>(file.get(), prefetch_size, is_numa,
+-                    lazy.for_file(idx));
++                    lazy.for_file(idx), addr_to_pass);
++
++            if (idx == 0 && use_shared_window) {
++                shared_addr = mapping->addr();
++                LLAMA_LOG_INFO("%s: PS5 sliding window initialized at base %p (size = %.2f GiB)\n",
++                    __func__, shared_addr, (double)file->size() / (1024.0 * 1024.0 * 1024.0));
++            }
++
++            if (use_shared_window) {
++                llama_mmap_register_shard(idx, file->file_id(), file->size(), shared_addr);
++            }
++
+             mmaps_used.emplace_back(mapping->size(), 0);
+             if (mlock_mmaps) {
+                 std::unique_ptr<llama_mlock> mlock_mmap(new llama_mlock());
+@@ -1439,6 +1457,11 @@ void llama_model_loader::init_mappings(bool prefetch, llama_mlocks * mlock_mmaps
+             }
+             mappings.emplace_back(std::move(mapping));
+         }
++
++        if (use_shared_window) {
++            ggml_cpu_set_tensor_hook(llama_mmap_check_tensor);
++            LLAMA_LOG_INFO("%s: PS5 shard pager hook enabled across %zu shards\n", __func__, files.size());
++        }
+     }
+ 
+     // compute the total size of all tensors for progress reporting
+@@ -1734,6 +1757,7 @@ bool llama_model_loader::load_all_data(
+             } else {
+                 ggml_backend_tensor_set(cur, data, 0, n_size);
+             }
++            llama_mmap_record_tensor_shard(cur, weight->idx);
+         } else {
+             const auto & file = files.at(weight->idx);
+ 
+@@ -1840,8 +1864,8 @@ bool llama_model_loader::load_all_data(
+ 
+     // check if this is the last call and do final cleanup
+     if (size_done >= size_data) {
+-        // unmap offloaded tensors and metadata
+-        if (use_mmap) {
++        // unmap offloaded tensors and metadata (only for single file models; multi-shard sliding window reuses entire mapping)
++        if (use_mmap && mappings.size() <= 1) {
+             for (uint32_t idx = 0; idx < mappings.size(); idx++) {
+                 const auto & mmap_used = mmaps_used.at(idx);
+                 auto & mapping = mappings.at(idx);
+diff --git a/tools/gguf-split/gguf-split.cpp b/tools/gguf-split/gguf-split.cpp
+index c6cdbb98e..ebc50bea8 100644
+--- a/tools/gguf-split/gguf-split.cpp
++++ b/tools/gguf-split/gguf-split.cpp
+@@ -17,6 +17,7 @@
+ #include <fstream>
+ #include <string>
+ #include <vector>
++#include <sys/stat.h>
+ 
+ #if defined(_WIN32)
+     #include <windows.h>
+@@ -320,6 +321,23 @@ struct split_strategy {
+             char split_path[PATH_MAX] = {0};
+             llama_split_path(split_path, sizeof(split_path), params.output.c_str(), i_split, n_split);
+ 
++            // calculate expected total size to support resuming
++            size_t expected_size = gguf_get_meta_size(ctx_out);
++            for (int i = 0; i < gguf_get_n_tensors(ctx_out); ++i) {
++                const char * t_name = gguf_get_tensor_name(ctx_out, i);
++                struct ggml_tensor * t = ggml_get_tensor(ctx_meta, t_name);
++                auto n_bytes = ggml_nbytes(t);
++                expected_size += GGML_PAD(n_bytes, GGUF_DEFAULT_ALIGNMENT);
++            }
++
++            struct stat st;
++            if (stat(split_path, &st) == 0 && (size_t)st.st_size == expected_size) {
++                printf("Writing file %s ... already complete (skipping)\n", split_path);
++                fflush(stdout);
++                i_split++;
++                continue;
++            }
++
+             // open the output file
+             printf("Writing file %s ... ", split_path);
+             fflush(stdout);

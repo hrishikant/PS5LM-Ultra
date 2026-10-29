@@ -13,14 +13,15 @@ version=$(sed -n 's/^#define PS5LM_VERSION "\(.*\)"$/\1/p' "$root/ps5/app/versio
 title=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["titleId"])' "$root/ps5/app/sce_sys/param.json")
 app="$root/build/app-ps5/title/$title"
 out="$root/build/release"
-zip="$out/ps5lm-plus-v$version.zip"
+zip="$out/ps5lm-ultra-v$version.zip"
 
 [ -f "$app/eboot.bin" ] || { echo "release-app: build it first (scripts/build-app.sh)" >&2; exit 1; }
 grep -q "^## \[$version\]" "$root/CHANGELOG.md" || { echo "release-app: CHANGELOG.md has no [$version] entry" >&2; exit 1; }
 # The console compares contentVersion (NN.NNN.NNN) to tell an installed copy is
 # outdated: major+1, minor, patch, so 0.8.2 ships as 01.008.002.
 IFS=. read -r major minor patch <<< "$version"
-content=$(printf '%02d.%03d.%03d' $((major + 1)) "$minor" "$patch")
+patch_num="${patch%%-*}"
+content=$(printf '%02d.%03d.%03d' $((major + 1)) "$minor" "$patch_num")
 grep -q "\"contentVersion\": \"$content\"" "$root/ps5/app/sce_sys/param.json" ||
     { echo "release-app: set contentVersion to $content in ps5/app/sce_sys/param.json" >&2; exit 1; }
 mkdir -p "$out"

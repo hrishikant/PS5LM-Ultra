@@ -5,6 +5,14 @@ Versions follow [semver](https://semver.org). The app's version is set in
 `v<version>` and ships `ps5lm-plus-v<version>.zip` (see `scripts/release-app.sh`).
 v0.1.x are the original PS5LM payload releases by Mert Cobanov.
 
+## [1.0.0-ultra] - 2026-10-29
+
+### Added
+- **PS5LM Ultra**: Capability to run massive LLMs up to 80B parameters on PS5.
+- **Single-Window Sliding Shard Pager**: Dynamically pages multi-shard GGUF models (e.g. Qwen3-Next-80B, ~42.6 GB across 12 shards) through a shared virtual memory window via `mmap(MAP_FIXED)`, staying well within the PS5 OS memory limit.
+- **Hybrid Inference Planner**: Automatically detects model size vs GPU budget. Models under 11 GiB run on GPU Vulkan (RADV) at full speed; models exceeding 11 GiB switch to SSD Streaming mode on Zen 2 CPU threads.
+- **Dashboard Badging**: TV UI and web app display `STREAM (SSD)` badges and live NVMe loading status.
+
 ## [Unreleased]
 
 ### Changed

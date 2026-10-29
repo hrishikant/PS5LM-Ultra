@@ -70,7 +70,7 @@ int __wrap_main(int argc, char ** argv, char ** envp) {
     // PLK-launched payloads have no console; capture everything to a file we
     // can read back over FTP.
     std::freopen("/data/PS5LM/cli-out.log", "w", stdout);
-    std::freopen("/data/PS5LM/cli-out.log", "a", stderr);
+    std::freopen("/data/PS5LM/llama.log", "w", stderr);
     setvbuf(stdout, nullptr, _IONBF, 0);
     setvbuf(stderr, nullptr, _IONBF, 0);
     if (argc <= 1) {
