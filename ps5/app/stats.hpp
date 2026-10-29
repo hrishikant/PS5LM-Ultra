@@ -35,6 +35,7 @@ struct ModelRow {
     std::string preset;     // the preset that filled its sampling ("Qwen 3.8"), or empty
     double      size_gib = 0;
     bool        fits     = false;
+    bool        ssd_stream = false; // PS5LM Ultra: SSD streaming mode
     bool        current  = false;
     std::string drive;  // the Drive's name it is on; every drive loads alike
 };
@@ -51,6 +52,7 @@ struct Live {
     uint32_t    ctx       = 0;
     std::string kv_type;
     double      kv_gib    = 0;
+    bool        ssd_stream = false; // PS5LM Ultra: running via SSD streaming
     std::string model_file;              // full path
     std::string plan;                    // the planner's line
     std::vector<std::string> args;       // llama-server's arguments

@@ -276,6 +276,7 @@ void StatsCollector::set_model(const Live & m) {
     live_.ctx         = m.ctx;
     live_.kv_type     = m.kv_type;
     live_.kv_gib      = m.kv_gib;
+    live_.ssd_stream  = m.ssd_stream;
     live_.model_file  = m.model_file;
     live_.plan        = m.plan;
     live_.args        = m.args;

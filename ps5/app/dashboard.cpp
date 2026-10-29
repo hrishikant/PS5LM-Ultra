@@ -928,16 +928,24 @@ void Dashboard::draw_content(gfx::DrawList & list, int tile, const Rect & r, flo
                    L.state == ServerState::generating ? kInk : kInk.with_alpha(0.8f), gfx::Align::right);
             if (L.state == ServerState::loading) {
                 const float p = std::max(0.0f, L.load_progress);
-                std::snprintf(text, sizeof(text), "Loading the model onto the GPU  \xC2\xB7  %.0f%%", p * 100.0f);
+                if (L.ssd_stream) {
+                    std::snprintf(text, sizeof(text), "SSD Pager: Streaming from NVMe SSD");
+                } else {
+                    std::snprintf(text, sizeof(text), "Loading the model onto the GPU  \xC2\xB7  %.0f%%", p * 100.0f);
+                }
                 const Rect lb{ r.x + kPad, r.y + 196, r.w - 2 * kPad, 14 };
                 list.rounded_rect(lb, 7, kInk.with_alpha(0.08f));
                 // A bright sheen runs along the filled part while it grows.
-                const float w = std::max(14.0f, lb.w * p);
-                list.rounded_rect({ lb.x, lb.y, w, lb.h }, 7, kCyan);
+                const float w = std::max(14.0f, lb.w * (L.ssd_stream ? 1.0f : p));
+                list.rounded_rect({ lb.x, lb.y, w, lb.h }, 7, L.ssd_stream ? Color::rgb(0xffa500) : kCyan);
                 const float sheen = std::fmod(clock_ * 0.6f, 1.0f);
                 list.glow({ lb.x + w * sheen - 20, lb.y, 40, lb.h }, 7, 16, kInk.with_alpha(0.35f));
-                std::snprintf(size_text_, sizeof(size_text_), "%.1f of %.1f GiB on the GPU", p * (L.model_gib + L.kv_gib),
-                              L.model_gib + L.kv_gib);
+                if (L.ssd_stream) {
+                    std::snprintf(size_text_, sizeof(size_text_), "%.1f GiB model  \xC2\xB7  4.0 GiB sliding window", L.model_gib);
+                } else {
+                    std::snprintf(size_text_, sizeof(size_text_), "%.1f of %.1f GiB on the GPU", p * (L.model_gib + L.kv_gib),
+                                  L.model_gib + L.kv_gib);
+                }
                 ui::text(list, f.regular, size_text_, r.x + kPad, r.y + 250, 20, kInk.with_alpha(kFaint));
             } else if (!serving) {
                 std::snprintf(text, sizeof(text), "%s", "Not serving");
@@ -1137,8 +1145,8 @@ void Dashboard::draw_content(gfx::DrawList & list, int tile, const Rect & r, flo
                      kInk.with_alpha(kMuted));
             const std::string rows[3][2] = {
                 { "SIZE", gib(L.model_gib) + " GiB" },
-                { "CONTEXT", L.ctx ? std::to_string(L.ctx / 1024) + "k, " + L.kv_type : std::string(kDash) },
-                { "ARCH", L.model_arch.empty() ? std::string(kDash) : L.model_arch },
+                { "CONTEXT", L.ctx ? (L.ctx >= 1024 ? std::to_string(L.ctx / 1024) + "k, " : std::to_string(L.ctx) + ", ") + L.kv_type : std::string(kDash) },
+                { "ENGINE", L.ssd_stream ? std::string("SSD STREAMING") : (L.model_arch.empty() ? std::string(kDash) : L.model_arch) },
             };
             for (int k = 0; k < 3; ++k) {
                 const float y = r.y + 196 + k * 46.0f;
@@ -1263,8 +1271,8 @@ void Dashboard::draw_library(gfx::DrawList & list, std::uint32_t glass) const {
         char size[24];
         std::snprintf(size, sizeof(size), "%.1f GiB", m.size_gib);
         ui::text(list, f.mono, size, panel.x + panel.w - 260, y + 44, 22, kInk.with_alpha(ink), gfx::Align::right);
-        const char * tag = m.current ? "LOADED" : m.fits ? "LOAD" : "TOO BIG";
-        const Color  tc  = m.current ? kCyan : m.fits ? kLime : kRose;
+        const char * tag = m.current ? "LOADED" : m.ssd_stream ? "STREAM (SSD)" : m.fits ? "LOAD" : "TOO BIG";
+        const Color  tc  = m.current ? kCyan : m.ssd_stream ? Color::rgb(0xffa500) : m.fits ? kLime : kRose;
         caps(list, f, tag, panel.x + panel.w - 60, y + 44, 15, tc, gfx::Align::right);
     }
     list.pop_opacity();

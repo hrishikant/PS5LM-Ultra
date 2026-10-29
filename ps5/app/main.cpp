@@ -743,7 +743,8 @@ struct Models {
             row.arch = m.arch;
             row.plan = p.why;
             row.fits = p.fits;
-            row.size_gib = m.file_bytes / 1073741824.0;
+            row.ssd_stream = p.ssd_stream;
+            row.size_gib = p.weights_gib;
             row.preset = pre ? pre->label : "";
             row.current = path == running;
             rows.push_back(row);
@@ -771,10 +772,11 @@ struct Models {
         model_part.args        = p.args;
         model_part.model_arch  = m.arch;
         model_part.preset      = pre ? pre->label : "";
-        model_part.model_gib   = m.file_bytes / 1073741824.0;
+        model_part.model_gib   = p.weights_gib;
         model_part.ctx         = p.ctx;
         model_part.kv_type     = p.kv_type;
         model_part.kv_gib      = p.kv_gib;
+        model_part.ssd_stream  = p.ssd_stream;
         return p.fits ? p.args : std::vector<std::string>{};
     }
 
@@ -808,7 +810,11 @@ struct Models {
         pthread_attr_setstacksize(&attr, 16u << 20);  // the console's default stack is small
         pthread_create(&server, &attr, run_server, nullptr);
         server_started = true;
-        notify("PS5LM Plus: loading the model onto the GPU");
+        if (model_part.ssd_stream) {
+            notify("PS5LM Ultra: starting 80B SSD streaming engine");
+        } else {
+            notify("PS5LM Plus: loading the model onto the GPU");
+        }
     }
 
     void stop() {

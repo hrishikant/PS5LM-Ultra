@@ -256,6 +256,23 @@ ModelInfo read_model_info(const std::string & path) {
         struct stat st = {};
         m.mmproj_bytes = stat(m.mmproj.c_str(), &st) == 0 ? (uint64_t) st.st_size : 0;
     }
+    const auto split = path.find("-00001-of-");
+    if (split != std::string::npos) {
+        int n_shards = 0;
+        if (std::sscanf(path.c_str() + split + 10, "%d", &n_shards) == 1 && n_shards > 1) {
+            uint64_t total_bytes = m.file_bytes;
+            char shard_pattern[1024];
+            for (int s = 2; s <= n_shards; ++s) {
+                std::snprintf(shard_pattern, sizeof(shard_pattern), "%.*s-%05d-of-%05d.gguf",
+                              (int)split, path.c_str(), s, n_shards);
+                struct stat st = {};
+                if (stat(shard_pattern, &st) == 0) {
+                    total_bytes += st.st_size;
+                }
+            }
+            m.file_bytes = total_bytes;
+        }
+    }
     return m;
 }
 
@@ -298,6 +315,8 @@ const std::vector<Preset> & presets() {
           { "--temp", "0.15" } },
         { "llama", "Llama 3", "8B fits at any 4-bit quant",
           { "--temp", "0.6", "--top-p", "0.9" } },
+        { "qwen3-next-80b", "Qwen3 Next 80B", "80B-A3B MoE streamed from NVMe SSD via sliding window",
+          { "--temp", "0.7", "--top-p", "0.80", "--top-k", "20", "--min-p", "0.05" } },
     };
     return table;
 }
@@ -362,9 +381,23 @@ Plan plan_model(const ModelInfo & m, double budget_gib, uint32_t ctx_cap, const 
 
     char why[160];
     if (!p.fits) {
-        p.total_gib = p.weights_gib + p.state_gib + p.reserve_gib;
-        std::snprintf(why, sizeof(why), "needs %.1f GiB with a 4k context; %.1f GiB is free", p.total_gib, budget_gib);
+        // PS5LM Ultra: SSD Streaming CPU mode for models that exceed GPU direct memory
+        p.fits = true;
+        p.ssd_stream = true;
+        p.ctx = 512;
+        p.kv_type = "q8_0";
+        p.total_gib = p.weights_gib;
+        std::snprintf(why, sizeof(why), "SSD Streaming (CPU, 512 ctx): %.1f GiB paged from NVMe", p.weights_gib);
         p.why = why;
+
+        p.args = { "-m", m.path, "-ngl", "0", "-fit", "off", "-lm", "none",
+                   "-c", std::to_string(p.ctx), "-fa", "off", "-ctk", p.kv_type, "-ctv", p.kv_type,
+                   "-t", "6", "-b", "64", "-ub", "32", "-np", "1",
+                   "-ctxcp", "1", "-cram", "0",
+                   "--host", "0.0.0.0", "--port", "8081" };
+        if (preset) {
+            p.args.insert(p.args.end(), preset->args.begin(), preset->args.end());
+        }
         return p;
     }
     std::snprintf(why, sizeof(why), "%uk context, %s cache%s: %.1f of %.1f GiB", p.ctx / 1024, p.kv_type.c_str(),

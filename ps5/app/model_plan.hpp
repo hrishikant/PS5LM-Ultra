@@ -65,6 +65,7 @@ const Preset * find_preset(const ModelInfo & m);
 
 struct Plan {
     bool        fits = false;
+    bool        ssd_stream = false; // PS5LM Ultra: SSD streaming mode for 80B+ models
     uint32_t    ctx  = 0;
     std::string kv_type;      // cache type for K and V
     double      weights_gib  = 0;

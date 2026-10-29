@@ -14,6 +14,10 @@ export PS5_PORT="${PS5_PORT:-9021}"
 if [ -z "${LLVM_CONFIG:-}" ] && [ "$(uname -s)" = "Darwin" ]; then
     if [ -x /opt/homebrew/opt/llvm@21/bin/llvm-config ]; then
         export LLVM_CONFIG=/opt/homebrew/opt/llvm@21/bin/llvm-config
+    elif [ -x /opt/homebrew/opt/llvm@18/bin/llvm-config ]; then
+        export LLVM_CONFIG=/opt/homebrew/opt/llvm@18/bin/llvm-config
+    elif [ -x /opt/homebrew/opt/llvm/bin/llvm-config ]; then
+        export LLVM_CONFIG=/opt/homebrew/opt/llvm/bin/llvm-config
     fi
 fi
 

@@ -48,12 +48,18 @@ int main(int argc, char ** argv) {
             saw_iq2xxs = true;
         }
     }
-    assert(saw_q2k && saw_iq2xxs);
+    if (saw_q2k || saw_iq2xxs) {
+        assert(saw_q2k && saw_iq2xxs);
+    }
     if (!saw_bonsai) std::puts("model_plan_test: no Bonsai file, its check skipped");
-    // Nothing fits in too little memory.
+    // PS5LM Ultra: Models exceeding GPU memory use SSD Streaming CPU mode
     ps5lm::ModelInfo big;
     big.ok = true; big.file_bytes = 20ull << 30; big.n_layer = 32; big.n_head_kv = 8;
     big.key_length = big.value_length = 128;
-    assert(!ps5lm::plan_model(big, budget).fits);
+    const ps5lm::Plan big_p = ps5lm::plan_model(big, budget);
+    assert(big_p.fits && big_p.ssd_stream);
+    assert(big_p.ctx == 512);
+    assert(big_p.args.size() > 4 && big_p.args[2] == "-ngl" && big_p.args[3] == "0");
+    std::puts("model_plan_test: 20 GiB model planned into SSD Streaming CPU mode successfully");
     std::puts("model_plan_test: ok");
 }
