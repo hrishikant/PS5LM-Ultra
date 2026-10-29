@@ -45,7 +45,7 @@ jobs:
 
       - name: Install Python build tools
         run: |
-          pip install --upgrade meson ninja mako markupsafe
+          pip install --upgrade meson ninja mako markupsafe packaging pyyaml
 
       - name: Configure Clang 18 defaults
         run: |
