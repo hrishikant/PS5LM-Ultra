@@ -96,7 +96,7 @@ jobs:
           bash tools/build-radv.sh release
 
           # Build host tools (ps5-native-tool) and libc.prx
-          make app
+          make libc
           cd ../../..
 
       - name: Fetch PS5 OpenGL SDK

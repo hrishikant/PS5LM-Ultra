@@ -263,3 +263,9 @@ int accept4(int s, struct sockaddr *restrict addr, socklen_t *restrict addrlen, 
 /* ps5-homebrew-ui's system.cpp calls this before hiding the splash, for apps
  * whose runtime holds the request back; PS5LM's does not. */
 void hui_release_splash(void) {}
+
+/* IEEE floating-point initialization for PS5 x86_64 target (clears FTZ and DAZ) */
+void ps5_fp_ieee(void) {
+    unsigned int mxcsr = 0x1f80;
+    __asm__ volatile("ldmxcsr %0" : : "m"(mxcsr));
+}
