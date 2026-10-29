@@ -38,7 +38,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes \
-            clang-18 clang-format-18 clang-tidy-18 lld-18 llvm-18 \
+            clang-18 clang-format-18 clang-tidy-18 lld-18 llvm-18 llvm-18-dev libclang-18-dev \
+            libclc-18 libclc-18-dev libllvmspirvlib-18-dev llvm-spirv-18 \
             make pkg-config tar unzip wget zip zlib1g-dev \
             ninja-build cmake glslc libvulkan-dev spirv-tools \
             rsync curl git
