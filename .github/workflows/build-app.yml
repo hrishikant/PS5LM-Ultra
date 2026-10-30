@@ -97,6 +97,16 @@ jobs:
 
           # Build host tools (ps5-native-tool) and libc.prx
           make libc
+          mkdir -p build/host
+          clang++ -std=c++20 -O2 -Wall -Wextra -Werror \
+            -I .deps/native/zlib-1.3.1.pkg/usr/include \
+            tooling/native/native_app_builder.cpp \
+            tooling/native/self_container.cpp \
+            tooling/native/elf_object.cpp \
+            tooling/native/sce_module_writer.cpp \
+            .deps/native/zlib-1.3.1.pkg/usr/lib/libz.a \
+            -o build/host/ps5-native-tool
+          chmod +x build/host/ps5-native-tool
           cd ../../..
 
       - name: Fetch PS5 OpenGL SDK
